@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/jesseduffield/lazygit/pkg/app"
@@ -80,9 +83,42 @@ func getIntegrationTest() integrationTypes.IntegrationTest {
 // dlv attach in a terminal. I have not been able to verify that it works on
 // other platforms, it may have to be adapted there.
 func isDebuggerAttached() bool {
-	process, err := ps.FindProcess(os.Getppid())
-	if err != nil {
-		return false
+	if runtime.GOOS == "linux" {
+		tpid, err := GetTracerPid()
+		if err != nil {
+			panic(err)
+		}
+		if tpid != 0 {
+			return true
+		}
+	} else {
+		process, err := ps.FindProcess(os.Getppid())
+		if err != nil {
+			return false
+		}
+		return process.Executable() == "debugserver"
 	}
-	return process.Executable() == "debugserver"
+	return false
+}
+
+// From https://stackoverflow.com/a/68210536
+func GetTracerPid() (int, error) {
+	file, err := os.Open("/proc/self/status")
+	if err != nil {
+		return -1, fmt.Errorf("can't open process status file: %w", err)
+	}
+	defer file.Close()
+
+	for {
+		var tpid int
+		num, err := fmt.Fscanf(file, "TracerPid: %d\n", &tpid)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if num != 0 {
+			return tpid, nil
+		}
+	}
+
+	return -1, errors.New("unknown format of process status file")
 }
